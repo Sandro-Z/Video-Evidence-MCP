@@ -1,0 +1,11 @@
+.git
+.venv
+.uv-cache
+.pytest_cache
+.mypy_cache
+.ruff_cache
+data
+test-results
+deploy/tunnel/tunnel-client
+deploy/tunnel/config
+.env

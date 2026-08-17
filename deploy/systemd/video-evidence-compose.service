@@ -1,0 +1,19 @@
+[Unit]
+Description=Video Evidence MCP Compose stack
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/video-evidence-mcp
+EnvironmentFile=-/etc/video-evidence-mcp/server.env
+ExecStartPre=/opt/video-evidence-mcp/scripts/prepare_data_dir.sh /data/video-evidence-mcp
+ExecStart=/usr/bin/docker compose up -d --wait redis mcp worker
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=900
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

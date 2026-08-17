@@ -1,0 +1,215 @@
+name: video-evidence-mcp
+
+x-common-env: &common-env
+  DATA_DIR: /data/video-evidence-mcp/app
+  REDIS_URL: redis://redis:6379/0
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  ANALYSIS_CONCURRENCY: ${ANALYSIS_CONCURRENCY:-1}
+  MAX_VIDEO_SECONDS: ${MAX_VIDEO_SECONDS:-7200}
+  MAX_TEMP_BYTES: ${MAX_TEMP_BYTES:-4294967296}
+  MAX_CACHE_BYTES: ${MAX_CACHE_BYTES:-10737418240}
+  CACHE_TTL_DAYS: ${CACHE_TTL_DAYS:-14}
+  JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-3600}
+  ASR_MODEL: ${ASR_MODEL:-small}
+  ASR_DEVICE: ${ASR_DEVICE:-cpu}
+  ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
+  OCR_ENABLED: ${OCR_ENABLED:-true}
+  PLAYWRIGHT_ENABLED: ${PLAYWRIGHT_ENABLED:-true}
+  TRUSTED_DNS_PROXY_CIDR: ${TRUSTED_DNS_PROXY_CIDR:-}
+  HF_HOME: /models/huggingface
+
+services:
+  redis:
+    image: redis:8.8.1-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/redis
+        target: /data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: video-evidence-mcp:0.1.0
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      AUTH_MODE: none
+      HOST: 0.0.0.0
+      PORT: 8787
+      TRUSTED_LOOPBACK_PROXY: "true"
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
+        target: /data/video-evidence-mcp/app
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/models
+        target: /models
+        bind:
+          create_host_path: false
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  worker:
+    image: video-evidence-mcp:0.1.0
+    restart: unless-stopped
+    command: ["video-evidence-worker"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *common-env
+      AUTH_MODE: none
+      HOST: 127.0.0.1
+    volumes:
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
+        target: /data/video-evidence-mcp/app
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/models
+        target: /models
+        bind:
+          create_host_path: false
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    networks: [backend]
+
+  worker-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: video-evidence-mcp-gpu:0.1.0
+    restart: unless-stopped
+    command: ["video-evidence-worker"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *common-env
+      AUTH_MODE: none
+      HOST: 127.0.0.1
+      ASR_DEVICE: cuda
+      ASR_COMPUTE_TYPE: float16
+    volumes:
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
+        target: /data/video-evidence-mcp/app
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/models
+        target: /models
+        bind:
+          create_host_path: false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  mcp-public:
+    profiles: ["public"]
+    image: video-evidence-mcp:0.1.0
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      AUTH_MODE: oidc
+      HOST: 0.0.0.0
+      PORT: 8787
+      PUBLIC_BASE_URL: https://${DOMAIN:-example.invalid}
+      DOMAIN: ${DOMAIN:-example.invalid}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_REQUIRED_SCOPES: ${OIDC_REQUIRED_SCOPES:-video:read}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+    volumes:
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
+        target: /data/video-evidence-mcp/app
+        bind:
+          create_host_path: false
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  worker-public:
+    profiles: ["public"]
+    image: video-evidence-mcp:0.1.0
+    restart: unless-stopped
+    command: ["video-evidence-worker"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *common-env
+      AUTH_MODE: none
+      HOST: 127.0.0.1
+    volumes:
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
+        target: /data/video-evidence-mcp/app
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/models
+        target: /models
+        bind:
+          create_host_path: false
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  caddy:
+    profiles: ["public"]
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-example.invalid}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/caddy-data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/caddy-config
+        target: /config
+        bind:
+          create_host_path: false
+    depends_on: [mcp-public]
+    networks: [backend]
+
+networks:
+  backend:
+    driver: bridge

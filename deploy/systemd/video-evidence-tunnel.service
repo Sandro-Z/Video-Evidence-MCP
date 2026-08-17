@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenAI Secure MCP Tunnel for Video Evidence
+Wants=network-online.target video-evidence-compose.service
+After=network-online.target video-evidence-compose.service
+Requires=video-evidence-compose.service
+
+[Service]
+Type=simple
+User=video-evidence
+Group=video-evidence
+EnvironmentFile=/etc/video-evidence-mcp/tunnel.env
+WorkingDirectory=/data/video-evidence-mcp/tunnel
+ExecStartPre=/opt/video-evidence-mcp/deploy/tunnel/tunnel-client doctor --profile video-evidence --explain
+ExecStart=/opt/video-evidence-mcp/deploy/tunnel/tunnel-client run --profile video-evidence
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/video-evidence-mcp/tunnel
+
+[Install]
+WantedBy=multi-user.target
