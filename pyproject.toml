@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-evidence-mcp"
+version = "0.1.0"
+description = "Private MCP server for timestamped evidence from public YouTube and Bilibili videos"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {text = "MIT"}
+dependencies = [
+  "faster-whisper>=1.2,<2",
+  "httpx>=0.28,<1",
+  "joserfc>=1.7,<2",
+  "mcp[cli]>=2.0,<3",
+  "numpy>=2.2,<3",
+  "pillow>=11,<13",
+  "playwright>=1.54,<2",
+  "pydantic>=2.11,<3",
+  "pydantic-settings>=2.10,<3",
+  "rapidocr-onnxruntime>=1.4,<2",
+  "redis>=6,<8",
+  "starlette>=0.47,<1",
+  "uvicorn[standard]>=0.35,<1",
+  "yt-dlp>=2025.7.21",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "pytest-cov>=6.2,<8",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+video-evidence-server = "video_evidence_mcp.server:main"
+video-evidence-worker = "video_evidence_mcp.worker:main"
+video-evidence-cache = "video_evidence_mcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/video_evidence_mcp"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-config --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "integration: requires service dependencies or external binaries",
+  "live: accesses live public video platforms",
+]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501", "B006"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["video_evidence_mcp"]
+warn_unused_ignores = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+  "faster_whisper.*",
+  "rapidocr_onnxruntime.*",
+  "yt_dlp.*",
+]
+ignore_missing_imports = true

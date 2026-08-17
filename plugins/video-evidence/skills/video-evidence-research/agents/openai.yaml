@@ -1,0 +1,13 @@
+interface:
+  display_name: "Video Evidence Research"
+  short_description: "Research with timestamped public video evidence"
+  default_prompt: "Use $video-evidence-research to research this topic with relevant video evidence."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "video-evidence"
+      description: "Search and analyze public YouTube and Bilibili videos"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8787/mcp"
+policy:
+  allow_implicit_invocation: true

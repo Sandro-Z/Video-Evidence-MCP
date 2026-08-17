@@ -1,0 +1,22 @@
+{
+  "name": "video-evidence",
+  "version": "0.1.0",
+  "description": "Research public YouTube and Bilibili videos using timestamped transcript, OCR, and visual evidence.",
+  "author": {
+    "name": "video-evidence-mcp contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Video Evidence",
+    "shortDescription": "Timestamped evidence from public videos",
+    "longDescription": "Search and analyze anonymous public YouTube and Bilibili content with captions or ASR, distributed visual sampling, OCR, and bounded timestamp-window review.",
+    "developerName": "video-evidence-mcp contributors",
+    "category": "Research",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "Research this topic and include relevant timestamped video evidence.",
+      "Summarize this public video with transcript and visual evidence."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

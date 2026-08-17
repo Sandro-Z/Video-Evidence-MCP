@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "youtube-explicit",
+      "prompt": "总结这个 YouTube 视频并给出时间戳：https://www.youtube.com/watch?v=VIDEO_ID",
+      "expect": ["search_videos or start_video_analysis", "transcript and visual check", "timestamp citation"]
+    },
+    {
+      "name": "bilibili-explicit",
+      "prompt": "总结这个 Bilibili 视频并核对画面：https://www.bilibili.com/video/BVEXAMPLE",
+      "expect": ["start_video_analysis", "timestamp citation"]
+    },
+    {
+      "name": "ordinary-research-with-demo",
+      "prompt": "研究一种新发布的软件功能如何操作，并给出可靠来源。",
+      "expect": ["search_videos", "analyze relevant demonstration if found"]
+    },
+    {
+      "name": "disputed-event",
+      "prompt": "核实一起有争议的公开事件中到底发生了什么。",
+      "expect": ["deep video analysis", "authoritative text source", "claim versus verification"]
+    },
+    {
+      "name": "title-only-inaccessible",
+      "prompt": "根据这个无法播放但有标题的视频判断它的完整论点。",
+      "expect": ["do not infer inaccessible content", "continue web research", "state limitation"]
+    },
+    {
+      "name": "caption-name-number-error",
+      "prompt": "从自动字幕提取人名和数字并核实。",
+      "expect": ["window review", "cross-check captions", "uncertainty"]
+    },
+    {
+      "name": "speech-visual-conflict",
+      "prompt": "视频口头描述与画面不一致时总结证据。",
+      "expect": ["deep analysis", "report discrepancy", "separate says from shows"]
+    },
+    {
+      "name": "negative-rewrite",
+      "prompt": "帮我润色这句话：今天的天气很好。",
+      "expect": ["no video tools"]
+    }
+  ]
+}
