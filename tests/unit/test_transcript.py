@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from video_evidence_mcp.pipeline.transcript import obtain_transcript, parse_subtitle_text
+import pytest
+
+from video_evidence_mcp.pipeline import transcript
+from video_evidence_mcp.pipeline.transcript import (
+    download_captions,
+    obtain_transcript,
+    parse_subtitle_text,
+)
 from video_evidence_mcp.schemas import TranscriptSegment
 
 
@@ -60,3 +67,63 @@ def test_asr_fallback_runs_when_captions_missing(tmp_path: Path) -> None:
     assert segments[0].text == "hello"
     assert (source, language, confidence) == ("asr", "en", "ok")
     assert warnings == ["no captions"]
+
+
+def test_audio_fallback_can_be_deferred_until_video_is_downloaded(tmp_path: Path) -> None:
+    def captions(
+        _url: str, _directory: Path, _languages: list[str]
+    ) -> tuple[list[TranscriptSegment], str, str | None, list[str]]:
+        return [], "none", None, ["captions unavailable"]
+
+    def unexpected_audio_fetch(_url: str, _directory: Path, _limit: int) -> Path:
+        raise AssertionError("audio should be reused from the later video download")
+
+    result = obtain_transcript(
+        "https://example.invalid/video",
+        tmp_path,
+        ["en"],
+        1024,
+        "tiny",
+        "cpu",
+        "int8",
+        caption_fetcher=captions,
+        audio_fetcher=unexpected_audio_fetch,
+        allow_audio_fallback=False,
+    )
+
+    assert result == (
+        [],
+        "none",
+        None,
+        "No transcript could be produced yet",
+        ["captions unavailable"],
+    )
+
+
+def test_caption_bot_challenge_returns_actionable_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeYoutubeDL:
+        def __init__(self, _options: dict[str, object]) -> None:
+            pass
+
+        def __enter__(self) -> FakeYoutubeDL:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def extract_info(self, _url: str, *, download: bool) -> None:
+            assert download
+            raise RuntimeError("Sign in to confirm you're not a bot")
+
+    monkeypatch.setattr(transcript, "YoutubeDL", FakeYoutubeDL)
+
+    segments, source, language, warnings = download_captions(
+        "https://www.youtube.com/watch?v=jNQXAC9IVRw", tmp_path, ["en"]
+    )
+
+    assert (segments, source, language) == ([], "none", None)
+    assert warnings == [
+        "YouTube blocked anonymous caption access with bot verification; trying ASR"
+    ]

@@ -11,6 +11,8 @@ fi
 install -d -m 0755 "$data_root"
 install -d -m 0750 "$data_root/app" "$data_root/models"
 chown 10001:10001 "$data_root/app" "$data_root/models"
+install -d -m 0700 "$data_root/secrets"
+chown 10001:10001 "$data_root/secrets"
 install -d -m 0750 "$data_root/redis"
 install -d -m 0750 "$data_root/caddy-data" "$data_root/caddy-config"
 chown 1000:1000 "$data_root/caddy-data" "$data_root/caddy-config"

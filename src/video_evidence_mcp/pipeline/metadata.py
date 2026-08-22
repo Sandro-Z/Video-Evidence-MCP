@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import io
 import logging
 import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
+from video_evidence_mcp.pipeline.bilibili_search import (
+    BilibiliSearchRateLimitError,
+    search_bilibili,
+)
+from video_evidence_mcp.pipeline.yt_dlp_support import (
+    common_ydl_options,
+    is_youtube_bot_challenge,
+)
 from video_evidence_mcp.schemas import Platform, SearchVideosInput, VideoMetadata
 from video_evidence_mcp.security import normalize_video_url
 
@@ -19,6 +26,10 @@ LOGGER = logging.getLogger(__name__)
 _RATE_LOCK = threading.Lock()
 _LAST_REQUEST: dict[Platform, float] = {}
 _MIN_REQUEST_INTERVAL = {Platform.YOUTUBE: 0.75, Platform.BILIBILI: 1.0}
+_YOUTUBE_SEARCH_PARAMS = {
+    "relevance": "EgIQAfABAQ==",  # Videos only.
+    "recent": "CAISAhAB8AEB",  # Videos only, newest first.
+}
 
 
 class PlatformAccessError(RuntimeError):
@@ -35,18 +46,15 @@ def _platform_rate_limit(platform: Platform) -> None:
         _LAST_REQUEST[platform] = time.monotonic()
 
 
-def _ydl(options: dict[str, Any] | None = None) -> YoutubeDL:
-    base: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "socket_timeout": 20,
-        "retries": 3,
-        "fragment_retries": 3,
-        "extractor_retries": 3,
-        "ignoreconfig": True,
-        "cachedir": False,
-    }
+def _ydl(options: dict[str, Any] | None = None, *, url: str | None = None) -> YoutubeDL:
+    base = common_ydl_options(url)
+    base.update(
+        {
+            "retries": 3,
+            "fragment_retries": 3,
+            "extractor_retries": 3,
+        }
+    )
     base.update(options or {})
     return YoutubeDL(base)
 
@@ -124,11 +132,7 @@ def _url_for(platform: Platform, video_id: str) -> str:
 def _extract_one(url: str, platform: Platform) -> dict[str, Any]:
     _platform_rate_limit(platform)
     try:
-        with (
-            contextlib.redirect_stdout(io.StringIO()),
-            contextlib.redirect_stderr(io.StringIO()),
-            _ydl() as ydl,
-        ):
+        with _ydl(url=url) as ydl:
             result = ydl.extract_info(url, download=False)
     except DownloadError as exc:
         raise PlatformAccessError(str(exc)) from exc
@@ -146,6 +150,11 @@ async def fetch_metadata(url: str, query: str = "") -> VideoMetadata:
             break
         except PlatformAccessError as exc:
             last_error = exc
+            if normalized.platform == Platform.YOUTUBE and is_youtube_bot_challenge(exc):
+                LOGGER.warning(
+                    "youtube bot verification blocked metadata; skipping deterministic retries"
+                )
+                raise
             if attempt == 2:
                 raise
             await asyncio.sleep(2**attempt)
@@ -155,28 +164,42 @@ async def fetch_metadata(url: str, query: str = "") -> VideoMetadata:
     return metadata_from_info(info, query=query, fallback=normalized.platform)
 
 
-def _search_candidates(request: SearchVideosInput, platform: Platform, limit: int) -> list[str]:
+def _search_target(request: SearchVideosInput, platform: Platform, result_limit: int) -> str:
+    if platform == Platform.YOUTUBE:
+        query = urlencode(
+            {
+                "search_query": request.query,
+                "sp": _YOUTUBE_SEARCH_PARAMS[request.sort],
+            }
+        )
+        return f"https://www.youtube.com/results?{query}"
+    return f"bilisearch{result_limit}:{request.query}"
+
+
+def _search_candidates_once(
+    request: SearchVideosInput, platform: Platform, limit: int
+) -> list[str]:
     _platform_rate_limit(platform)
-    prefix = (
-        "ytsearchdate" if platform == Platform.YOUTUBE and request.sort == "recent" else "ytsearch"
-    )
+    result_limit = min(limit * 3, 40)
     if platform == Platform.BILIBILI:
-        prefix = "bilisearch"
-    options: dict[str, Any] = {"extract_flat": True, "playlistend": min(limit * 3, 40)}
+        return search_bilibili(request, result_limit)
+    options: dict[str, Any] = {
+        "extract_flat": True,
+        "playlistend": result_limit,
+    }
     if request.published_after:
         options["dateafter"] = request.published_after.strftime("%Y%m%d")
     if request.published_before:
         options["datebefore"] = request.published_before.strftime("%Y%m%d")
-    with (
-        contextlib.redirect_stdout(io.StringIO()),
-        contextlib.redirect_stderr(io.StringIO()),
-        _ydl(options) as ydl,
-    ):
-        result = ydl.extract_info(f"{prefix}{min(limit * 3, 40)}:{request.query}", download=False)
+    target = _search_target(request, platform, result_limit)
+    with _ydl(options, url=target) as ydl:
+        result = ydl.extract_info(target, download=False)
+    if result is not None and not isinstance(result, dict):
+        raise PlatformAccessError("platform search returned an unexpected response type")
     entries = (result or {}).get("entries") or []
     urls: list[str] = []
     for entry in entries:
-        if not entry:
+        if not isinstance(entry, dict):
             continue
         candidate = entry.get("url") or entry.get("webpage_url")
         if not candidate:
@@ -190,12 +213,43 @@ def _search_candidates(request: SearchVideosInput, platform: Platform, limit: in
     return list(dict.fromkeys(urls))
 
 
-async def search_videos_impl(request: SearchVideosInput) -> tuple[list[VideoMetadata], list[str]]:
+def _search_candidates(
+    request: SearchVideosInput,
+    platform: Platform,
+    limit: int,
+    trace_id: str | None = None,
+) -> list[str]:
+    attempts = 3 if platform == Platform.YOUTUBE else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return _search_candidates_once(request, platform, limit)
+        except KeyError as exc:
+            if platform != Platform.YOUTUBE:
+                raise
+            LOGGER.warning(
+                "youtube search response parsing failed trace=%s attempt=%d/%d key=%r",
+                trace_id or "untracked",
+                attempt,
+                attempts,
+                exc.args[0] if exc.args else None,
+                exc_info=True,
+            )
+            if attempt == attempts:
+                raise PlatformAccessError(
+                    "YouTube search response parsing failed after retries"
+                ) from exc
+            time.sleep(2 ** (attempt - 1))
+    raise AssertionError("search retry loop exited unexpectedly")
+
+
+async def search_videos_impl(
+    request: SearchVideosInput, trace_id: str | None = None
+) -> tuple[list[VideoMetadata], list[str]]:
     per_platform = max(1, request.max_results // len(request.platforms) + 1)
     warnings: list[str] = []
     candidate_groups = await asyncio.gather(
         *[
-            asyncio.to_thread(_search_candidates, request, platform, per_platform)
+            asyncio.to_thread(_search_candidates, request, platform, per_platform, trace_id)
             for platform in request.platforms
         ],
         return_exceptions=True,
@@ -203,7 +257,18 @@ async def search_videos_impl(request: SearchVideosInput) -> tuple[list[VideoMeta
     candidates: list[str] = []
     for platform, group in zip(request.platforms, candidate_groups, strict=True):
         if isinstance(group, BaseException):
-            warnings.append(f"{platform.value} search failed: {type(group).__name__}")
+            LOGGER.warning(
+                "platform search failed trace=%s platform=%s type=%s message=%s",
+                trace_id or "untracked",
+                platform.value,
+                type(group).__name__,
+                str(group),
+                exc_info=(type(group), group, group.__traceback__),
+            )
+            if isinstance(group, BilibiliSearchRateLimitError):
+                warnings.append("bilibili search rate limited: HTTP 412")
+            else:
+                warnings.append(f"{platform.value} search failed: {type(group).__name__}")
         else:
             candidates.extend(group[:per_platform])
     verified = await asyncio.gather(
@@ -211,8 +276,16 @@ async def search_videos_impl(request: SearchVideosInput) -> tuple[list[VideoMeta
         return_exceptions=True,
     )
     results: list[VideoMetadata] = []
-    for item in verified:
+    for candidate, item in zip(candidates, verified, strict=True):
         if isinstance(item, BaseException):
+            LOGGER.warning(
+                "candidate metadata verification failed trace=%s url=%s type=%s message=%s",
+                trace_id or "untracked",
+                candidate,
+                type(item).__name__,
+                str(item),
+                exc_info=(type(item), item, item.__traceback__),
+            )
             warnings.append(f"candidate metadata verification failed: {type(item).__name__}")
             continue
         if item.is_live or item.availability not in {"public", "unlisted"}:
@@ -223,6 +296,7 @@ async def search_videos_impl(request: SearchVideosInput) -> tuple[list[VideoMeta
                 f"; requested language {request.language} will be checked in captions"
             )
         results.append(item)
-        if len(results) >= request.max_results:
-            break
-    return results, warnings[:50]
+    if request.sort == "recent":
+        oldest = datetime.min.replace(tzinfo=UTC)
+        results.sort(key=lambda item: item.published_at or oldest, reverse=True)
+    return results[: request.max_results], warnings[:50]

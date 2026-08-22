@@ -147,7 +147,7 @@ def create_server(settings: Settings | None = None) -> tuple[MCPServer, Runtime]
                     "language": language,
                 }
             )
-            results, warnings = await search_videos_impl(request)
+            results, warnings = await search_videos_impl(request, trace_id=call_trace)
             return SearchVideosOutput(
                 ok=True,
                 trace_id=call_trace,
@@ -156,7 +156,12 @@ def create_server(settings: Settings | None = None) -> tuple[MCPServer, Runtime]
                 results=results,
             )
         except Exception as exc:
-            LOGGER.warning("search failed trace=%s type=%s", call_trace, type(exc).__name__)
+            LOGGER.exception(
+                "search failed trace=%s type=%s message=%s",
+                call_trace,
+                type(exc).__name__,
+                str(exc),
+            )
             return SearchVideosOutput(
                 ok=False,
                 trace_id=call_trace,

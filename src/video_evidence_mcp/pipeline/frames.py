@@ -4,10 +4,11 @@ import json
 import math
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 from yt_dlp import YoutubeDL
+
+from video_evidence_mcp.pipeline.yt_dlp_support import common_ydl_options
 
 VIDEO_FORMAT_SELECTOR = (
     "bestvideo[width<=1280][height<=1280]+bestaudio/"
@@ -36,28 +37,27 @@ def probe_duration(media: Path) -> float:
 
 
 def download_video(url: str, workdir: Path, max_bytes: int) -> Path:
-    options: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "ignoreconfig": True,
-        "noplaylist": True,
-        # Bound both axes so portrait and landscape 720p-class streams are eligible.
-        # Do not filter on `filesize`: many DASH formats only expose an estimate and
-        # yt-dlp treats an unknown exact filesize as not matching that filter.
-        "format": VIDEO_FORMAT_SELECTOR,
-        "outtmpl": str(workdir / "video.%(ext)s"),
-        "max_filesize": max_bytes,
-        "merge_output_format": "mp4",
-        "socket_timeout": 20,
-        "retries": 10,
-        "fragment_retries": 10,
-        "extractor_retries": 10,
-        "retry_sleep_functions": {
-            "http": _retry_sleep,
-            "fragment": _retry_sleep,
-            "extractor": _retry_sleep,
-        },
-    }
+    options = common_ydl_options(url)
+    options.update(
+        {
+            # Bound both axes so portrait and landscape 720p-class streams are eligible.
+            # Do not filter on `filesize`: many DASH formats only expose an estimate and
+            # yt-dlp treats an unknown exact filesize as not matching that filter.
+            "format": VIDEO_FORMAT_SELECTOR,
+            "outtmpl": str(workdir / "video.%(ext)s"),
+            "max_filesize": max_bytes,
+            "merge_output_format": "mp4",
+            "socket_timeout": 20,
+            "retries": 3,
+            "fragment_retries": 3,
+            "extractor_retries": 3,
+            "retry_sleep_functions": {
+                "http": _retry_sleep,
+                "fragment": _retry_sleep,
+                "extractor": _retry_sleep,
+            },
+        }
+    )
     with YoutubeDL(options) as ydl:
         ydl.extract_info(url, download=True)
     candidates = [path for path in workdir.glob("video.*") if path.is_file()]

@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     asr_compute_type: str = "int8"
     ocr_enabled: bool = True
     playwright_enabled: bool = True
+    youtube_cookies_file: Path | None = None
     openai_vision_enabled: bool = False
     openai_api_key: SecretStr | None = None
     domain: str | None = None
@@ -49,6 +50,11 @@ class Settings(BaseSettings):
     oidc_jwks_url: str | None = None
     rate_limit_per_minute: int = Field(30, ge=1, le=10000)
     max_http_concurrency: int = Field(8, ge=1, le=128)
+
+    @field_validator("youtube_cookies_file", mode="before")
+    @classmethod
+    def empty_cookie_path_is_none(cls, value: object) -> object:
+        return None if value == "" else value
 
     @model_validator(mode="after")
     def validate_network_auth(self) -> Settings:
@@ -74,6 +80,13 @@ class Settings(BaseSettings):
                 raise ValueError("PUBLIC_BASE_URL must use HTTPS in OIDC mode")
         if self.openai_vision_enabled and self.openai_api_key is None:
             raise ValueError("OPENAI_API_KEY is required when OPENAI_VISION_ENABLED=true")
+        if self.youtube_cookies_file is not None:
+            if not self.youtube_cookies_file.is_absolute():
+                raise ValueError("YOUTUBE_COOKIES_FILE must be an absolute container path")
+            if not self.youtube_cookies_file.is_file():
+                raise ValueError("YOUTUBE_COOKIES_FILE must point to a readable file")
+            if self.youtube_cookies_file.stat().st_size > 2 * 1024**2:
+                raise ValueError("YOUTUBE_COOKIES_FILE must not exceed 2 MiB")
         if self.trusted_dns_proxy_cidr:
             try:
                 trusted_network = ipaddress.ip_network(self.trusted_dns_proxy_cidr, strict=False)

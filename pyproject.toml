@@ -23,7 +23,7 @@ dependencies = [
   "redis>=6,<8",
   "starlette>=0.47,<1",
   "uvicorn[standard]>=0.35,<1",
-  "yt-dlp>=2025.7.21",
+  "yt-dlp[default,deno]>=2025.7.21",
 ]
 
 [project.optional-dependencies]

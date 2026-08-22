@@ -26,9 +26,10 @@ from video_evidence_mcp.pipeline.frames import (
     probe_duration,
     stamp_frame,
 )
-from video_evidence_mcp.pipeline.metadata import fetch_metadata
+from video_evidence_mcp.pipeline.metadata import PlatformAccessError, fetch_metadata
 from video_evidence_mcp.pipeline.ocr import OCRProcessor
 from video_evidence_mcp.pipeline.transcript import obtain_transcript, transcribe_audio
+from video_evidence_mcp.pipeline.yt_dlp_support import is_youtube_bot_challenge
 from video_evidence_mcp.schemas import (
     AnalysisEvidence,
     ErrorCode,
@@ -88,7 +89,17 @@ def run_pipeline(
     workdir_path = Path(tempfile.mkdtemp(prefix="job-", dir=settings.temp_dir))
     try:
         progress(0.05, "metadata", warnings)
-        metadata = asyncio.run(fetch_metadata(payload.normalized_url, payload.question))
+        try:
+            metadata = asyncio.run(fetch_metadata(payload.normalized_url, payload.question))
+        except PlatformAccessError as exc:
+            if payload.platform == Platform.YOUTUBE and is_youtube_bot_challenge(exc):
+                raise PipelineError(
+                    ErrorCode.AUTHENTICATION_REQUIRED,
+                    "YouTube bot verification blocked this server's session; configure a cookies file or use a different egress IP",
+                ) from exc
+            raise PipelineError(
+                ErrorCode.PLATFORM_ERROR, "platform metadata access failed"
+            ) from exc
         duration = metadata.duration_seconds
         if metadata.is_live:
             raise PipelineError(ErrorCode.LIVE_NOT_SUPPORTED, "live streams are not supported")
@@ -122,6 +133,7 @@ def run_pipeline(
                 settings.asr_model,
                 settings.asr_device,
                 settings.asr_compute_type,
+                allow_audio_fallback=False,
             )
         )
         warnings.extend(transcript_warnings)
@@ -135,9 +147,8 @@ def run_pipeline(
             )
         duration = actual_duration
 
-        # If the dedicated audio fetch failed, reuse the already downloaded media.
-        # faster-whisper/FFmpeg can decode its audio stream directly, avoiding a
-        # second platform request and preserving the subtitle -> ASR fallback.
+        # Reuse the downloaded video for ASR. faster-whisper/FFmpeg can decode its
+        # audio stream directly, avoiding a second media request to the platform.
         if transcript_source == "none":
             progress(0.52, "asr_from_downloaded_media", warnings)
             try:

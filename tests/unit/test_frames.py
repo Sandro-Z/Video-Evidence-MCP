@@ -62,7 +62,8 @@ def test_download_format_accepts_portrait_and_unknown_filesize(
     assert "filesize" not in str(captured["format"])
     assert "width<=1280" in str(captured["format"])
     assert captured["max_filesize"] == 1024
-    assert captured["retries"] == 10
-    assert captured["fragment_retries"] == 10
+    assert captured["retries"] == 3
+    assert captured["fragment_retries"] == 3
+    assert captured["sleep_interval_requests"] == 1.0
     assert _retry_sleep(n=0) == 1.0
     assert _retry_sleep(n=10) == 20.0

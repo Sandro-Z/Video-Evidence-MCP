@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from faster_whisper import WhisperModel
 from yt_dlp import YoutubeDL
 
+from video_evidence_mcp.pipeline.yt_dlp_support import (
+    common_ydl_options,
+    is_youtube_bot_challenge,
+)
 from video_evidence_mcp.schemas import TranscriptSegment
+
+LOGGER = logging.getLogger(__name__)
 
 TIMING_RE = re.compile(
     r"(?P<start>\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3})\s+-->\s+"
@@ -66,28 +72,35 @@ def download_captions(
     url: str, workdir: Path, languages: list[str]
 ) -> tuple[list[TranscriptSegment], str, str | None, list[str]]:
     outtmpl = str(workdir / "caption.%(ext)s")
-    options: dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "ignoreconfig": True,
-        "noplaylist": True,
-        "skip_download": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": languages,
-        "subtitlesformat": "vtt/srt/best",
-        "outtmpl": outtmpl,
-        "socket_timeout": 20,
-        "retries": 10,
-        "fragment_retries": 10,
-        "extractor_retries": 10,
-        "retry_sleep_functions": {"http": _retry_sleep, "extractor": _retry_sleep},
-    }
+    options = common_ydl_options(url)
+    options.update(
+        {
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": languages,
+            "subtitlesformat": "vtt/srt/best",
+            "outtmpl": outtmpl,
+            "socket_timeout": 20,
+            "retries": 3,
+            "fragment_retries": 3,
+            "extractor_retries": 3,
+            "retry_sleep_functions": {"http": _retry_sleep, "extractor": _retry_sleep},
+        }
+    )
     warnings: list[str] = []
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
     except Exception as exc:
+        LOGGER.warning("caption retrieval failed: %s", str(exc), exc_info=True)
+        if is_youtube_bot_challenge(exc):
+            return (
+                [],
+                "none",
+                None,
+                ["YouTube blocked anonymous caption access with bot verification; trying ASR"],
+            )
         return [], "none", None, [f"caption retrieval failed: {type(exc).__name__}"]
     caption_files = sorted(workdir.glob("caption.*.vtt")) + sorted(workdir.glob("caption.*.srt"))
     if not caption_files:
@@ -103,24 +116,23 @@ def download_captions(
 
 def download_audio(url: str, workdir: Path, max_bytes: int) -> Path:
     target = workdir / "audio.%(ext)s"
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "ignoreconfig": True,
-        "noplaylist": True,
-        "format": "bestaudio/best[acodec!=none]",
-        "outtmpl": str(target),
-        "max_filesize": max_bytes,
-        "socket_timeout": 20,
-        "retries": 10,
-        "fragment_retries": 10,
-        "extractor_retries": 10,
-        "retry_sleep_functions": {
-            "http": _retry_sleep,
-            "fragment": _retry_sleep,
-            "extractor": _retry_sleep,
-        },
-    }
+    options = common_ydl_options(url)
+    options.update(
+        {
+            "format": "bestaudio/best[acodec!=none]",
+            "outtmpl": str(target),
+            "max_filesize": max_bytes,
+            "socket_timeout": 20,
+            "retries": 3,
+            "fragment_retries": 3,
+            "extractor_retries": 3,
+            "retry_sleep_functions": {
+                "http": _retry_sleep,
+                "fragment": _retry_sleep,
+                "extractor": _retry_sleep,
+            },
+        }
+    )
     with YoutubeDL(options) as ydl:
         ydl.extract_info(url, download=True)
     files = [path for path in workdir.glob("audio.*") if path.is_file()]
@@ -174,6 +186,7 @@ def obtain_transcript(
     asr: Callable[
         [Path, str, str, str, str | None], tuple[list[TranscriptSegment], str | None, str]
     ] = transcribe_audio,
+    allow_audio_fallback: bool = True,
 ) -> tuple[list[TranscriptSegment], str, str | None, str, list[str]]:
     segments, source, language, warnings = caption_fetcher(url, workdir, languages)
     if segments:
@@ -183,6 +196,8 @@ def obtain_transcript(
             else "Automatic platform captions; verify names and numbers against audio/visual evidence"
         )
         return segments, source, language, confidence, warnings
+    if not allow_audio_fallback:
+        return [], "none", None, "No transcript could be produced yet", warnings
     try:
         audio = audio_fetcher(url, workdir, max_bytes)
         segments, language, confidence = asr(

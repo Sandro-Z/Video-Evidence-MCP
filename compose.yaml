@@ -15,8 +15,17 @@ x-common-env: &common-env
   ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
   OCR_ENABLED: ${OCR_ENABLED:-true}
   PLAYWRIGHT_ENABLED: ${PLAYWRIGHT_ENABLED:-true}
+  YOUTUBE_COOKIES_FILE: ${YOUTUBE_COOKIES_FILE:-}
   TRUSTED_DNS_PROXY_CIDR: ${TRUSTED_DNS_PROXY_CIDR:-}
   HF_HOME: /models/huggingface
+
+x-youtube-cookie-volume: &youtube-cookie-volume
+  type: bind
+  source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/secrets
+  target: /run/secrets/video-evidence-mcp
+  read_only: true
+  bind:
+    create_host_path: false
 
 services:
   redis:
@@ -51,6 +60,7 @@ services:
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
+      - *youtube-cookie-volume
       - type: bind
         source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
         target: /data/video-evidence-mcp/app
@@ -77,6 +87,7 @@ services:
       AUTH_MODE: none
       HOST: 127.0.0.1
     volumes:
+      - *youtube-cookie-volume
       - type: bind
         source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
         target: /data/video-evidence-mcp/app
@@ -111,6 +122,7 @@ services:
       ASR_DEVICE: cuda
       ASR_COMPUTE_TYPE: float16
     volumes:
+      - *youtube-cookie-volume
       - type: bind
         source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
         target: /data/video-evidence-mcp/app
@@ -149,6 +161,7 @@ services:
       OIDC_REQUIRED_SCOPES: ${OIDC_REQUIRED_SCOPES:-video:read}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
     volumes:
+      - *youtube-cookie-volume
       - type: bind
         source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
         target: /data/video-evidence-mcp/app
@@ -171,6 +184,7 @@ services:
       AUTH_MODE: none
       HOST: 127.0.0.1
     volumes:
+      - *youtube-cookie-volume
       - type: bind
         source: ${VIDEO_EVIDENCE_DATA_ROOT:-/data/video-evidence-mcp}/app
         target: /data/video-evidence-mcp/app

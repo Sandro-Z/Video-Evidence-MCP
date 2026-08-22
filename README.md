@@ -1,6 +1,6 @@
 # video-evidence-mcp
 
-`video-evidence-mcp` is a self-hosted, read-only MCP service and a `video-evidence` ChatGPT/Codex plugin. It searches anonymous public YouTube and Bilibili content and produces a compact evidence package: verified metadata, timestamped captions or local ASR, whole-video distributed frames, scene-change frames, Chinese/English OCR, contact sheets, and bounded window reinspection.
+`video-evidence-mcp` is a self-hosted, read-only MCP service and a `video-evidence` ChatGPT Web/Codex plugin. It searches anonymous public YouTube and Bilibili content and produces a compact evidence package: verified metadata, timestamped captions or local ASR, whole-video distributed frames, scene-change frames, Chinese/English OCR, contact sheets, and bounded window reinspection.
 
 The default deployment listens only on `127.0.0.1:8787`. Long analyses are queued in Redis and executed by a separate worker; an MCP request only enqueues or polls work. No server-side LLM is required. The calling ChatGPT reads the transcript and `ImageContent` contact sheet and writes the final explanation.
 
@@ -45,19 +45,6 @@ Security boundaries:
 
 This implementation follows the current [OpenAI MCP server guide](https://developers.openai.com/plugins/build/mcp-server), [plugin packaging guide](https://developers.openai.com/plugins/build/plugins), [authentication guide](https://developers.openai.com/plugins/build/auth), [ChatGPT connection guide](https://developers.openai.com/plugins/deploy/connect-chatgpt), and [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). The server uses the current stable v2 line of the [official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).
 
-## Resource guidance
-
-The detected server (Intel N100, 4 cores, 7.5 GiB RAM, no GPU) should keep `ANALYSIS_CONCURRENCY=1`, `ASR_MODEL=small`, `ASR_COMPUTE_TYPE=int8`, standard analysis at 24 frames, and deep analysis at 48 frames. Expect ASR on long videos to be CPU-bound. About 10–15 GiB free disk is a comfortable minimum for images, browser binaries, ASR model cache, and temporary media; this checkout defaults to a 10 GiB evidence limit and a 4 GiB per-job temporary-media limit.
-
-For a supported NVIDIA host, verify `nvidia-smi` and NVIDIA Container Toolkit first, stop the CPU worker, then build/start `worker-gpu`:
-
-```bash
-sudo docker compose stop worker
-sudo docker compose --profile gpu up -d --build worker-gpu
-```
-
-The GPU image targets CUDA 12/cuDNN 9. This host has no detected GPU, so only the CPU profile is locally validated.
-
 ## Local start
 
 ```bash
@@ -72,6 +59,30 @@ curl --fail http://127.0.0.1:8787/readyz
 No inbound home-network port is opened. Do not change the Compose port mapping to `0.0.0.0:8787` while `AUTH_MODE=none`.
 
 If both `getent ahosts www.youtube.com` and `getent ahosts www.bilibili.com` return synthetic `198.18.x.x` addresses because this host uses a trusted transparent DNS proxy, set `TRUSTED_DNS_PROXY_CIDR=198.18.0.0/15` in the local ignored `.env`. Leave it empty on ordinary DNS.
+
+### YouTube bot verification
+
+The locked yt-dlp installation includes its recommended Deno runtime and matching EJS challenge scripts. This fixes JavaScript challenge extraction, but it cannot clear an IP- or session-level `Sign in to confirm you're not a bot` response. The server fails that condition without repeated extraction attempts and reports `authentication_required`.
+
+If YouTube challenges this server's egress IP, you may opt into a Netscape-format cookie file for public-video extraction. This uses a YouTube account session: yt-dlp warns that the account can be temporarily or permanently banned, so use it only when necessary, keep request volume low, and prefer an account dedicated to this workload. Follow yt-dlp's current cookie-export guidance; do not paste cookies into `.env` or commit them.
+
+```bash
+sudo ./scripts/prepare_data_dir.sh /data/video-evidence-mcp
+sudo install -o 10001 -g 10001 -m 0600 /path/to/youtube-cookies.txt \
+  /data/video-evidence-mcp/secrets/youtube-cookies.txt
+```
+
+Then set only the in-container path in the ignored `.env`:
+
+```text
+YOUTUBE_COOKIES_FILE=/run/secrets/video-evidence-mcp/youtube-cookies.txt
+```
+
+Compose mounts the secrets directory read-only. Each yt-dlp request loads the cookie jar into memory so yt-dlp cannot rewrite the source secret. Leave `YOUTUBE_COOKIES_FILE` empty to retain anonymous-only behavior.
+
+### Bilibili search HTTP 412
+
+Bilibili search first opens the public homepage to obtain a real anonymous `buvid3` guest cookie, then reuses that short-lived in-memory session for the public search API. Cookie values are never logged or persisted. An HTTP 412 response invalidates the cached guest session and is reported as `bilibili search rate limited: HTTP 412`; it is not retried blindly because repeated requests can extend an IP-level restriction.
 
 For development and tests inside the locked image:
 
@@ -94,7 +105,7 @@ For the browser UI, run `npx -y @modelcontextprotocol/inspector@latest`, select 
 
 ## Secure MCP Tunnel activation
 
-Secure MCP Tunnel is the preferred private route: the server stays loopback-only and `tunnel-client` makes outbound HTTPS requests to OpenAI. A Tunnel ID and a control-plane API key cannot be fabricated locally.
+Secure MCP Tunnel is the preferred private route: the server stays loopback-only and `tunnel-client` makes outbound HTTPS requests to OpenAI. A Tunnel ID and a control-plane API key are required.
 
 1. In [OpenAI Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels), create or select a tunnel, associate the intended Platform organization and ChatGPT workspace, and grant the operator Tunnels Read + Use (Manage is needed to create/edit).
 2. Download the latest `tunnel-client` from the Platform page or the latest public `openai/tunnel-client` release; save it as `deploy/tunnel/tunnel-client`, make it executable, and keep it out of Git.
@@ -188,7 +199,7 @@ Cleanup removes only expired/over-limit evidence entries. It never deletes confi
 - Platform markup, captions, and anonymous-access policy change. When popup fixtures still pass but live access fails, capture only redacted status/selector diagnostics, update the platform adapter's stable roles/attributes/text, and rerun fixture plus live smoke tests.
 - The 2026-08-17 build environment reset every Playwright CDN TLS download, so the verified image explicitly launches Debian Chromium. When CDN access returns, install Playwright's matching browser and remove the executable override during a planned rebuild.
 - This host's transparent proxy resolves both platforms into `198.18.0.0/15`; its ignored local `.env` explicitly trusts only that benchmarking CIDR. On another server, remove this setting unless the same mapping is independently verified.
-- Region restrictions, bot challenges, forced authentication, age gates, private/paid videos, and live streams are reported as limitations; they are not bypassed.
+- Region restrictions, rejected bot challenges, forced authentication, age gates, private/paid videos, and live streams are reported as limitations; they are not bypassed. The optional YouTube cookie file supplies an operator-controlled session but does not solve CAPTCHA or override content access controls.
 - yt-dlp extraction may break after site changes. Reproduce with `yt-dlp --verbose --skip-download '<canonical-url>'` in the worker image, redact request data, then upgrade/lock/rebuild.
 - Automatic captions, Whisper, and OCR can be wrong, especially for proper names, numbers, overlapping speech, stylized text, and low-resolution frames. The Skill requires transcript/visual window cross-checking for important claims.
 - Scene detection plus fixed samples gives whole-video coverage, not frame-complete observation. `get_video_window` is capped and returns cached thumbnails, never arbitrary original media.

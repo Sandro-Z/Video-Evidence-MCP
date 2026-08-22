@@ -1,0 +1,11 @@
+interface:
+  display_name: "Video Evidence on Request"
+  short_description: "Use video evidence only when explicitly requested"
+  default_prompt: "Use $video-evidence-on-request to answer with verified video evidence."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "video-evidence"
+      description: "Search and analyze public YouTube and Bilibili videos"
+policy:
+  allow_implicit_invocation: true
