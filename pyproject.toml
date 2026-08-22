@@ -21,7 +21,7 @@ dependencies = [
   "pydantic-settings>=2.10,<3",
   "rapidocr-onnxruntime>=1.4,<2",
   "redis>=6,<8",
-  "starlette>=0.47,<1",
+  "starlette>=0.47,<2",
   "uvicorn[standard]>=0.35,<1",
   "yt-dlp[default,deno]>=2025.7.21",
 ]
@@ -29,7 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy>=1.17,<2",
-  "pytest>=8.4,<9",
+  "pytest>=8.4,<10",
   "pytest-asyncio>=1.1,<2",
   "pytest-cov>=6.2,<8",
   "ruff>=0.12,<1",
